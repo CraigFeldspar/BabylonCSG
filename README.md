@@ -12,8 +12,8 @@ https://github.com/evanw/csg.js/
 
 #Example
 
-	var a = BABYLON.Mesh.CreateBox("box", 500, wanaplan.engine3D.scene);
-	var b = BABYLON.Mesh.CreateBox("box", 500, wanaplan.engine3D.scene);
+	var a = BABYLON.Mesh.CreateBox("box", 500, scene);
+	var b = BABYLON.Mesh.CreateBox("box", 500, scene);
 
 	a.position.y += 500;
 	b.position.y += 250;
@@ -29,3 +29,5 @@ https://github.com/evanw/csg.js/
 	b.dispose();
 
 	subCSG.toMesh("csg", new BABYLON.StandardMaterial("mat", scene), scene);
+
+![](http://f.cl.ly/items/1f1v2Y2O1Y1e1I3f2j2I/Capture.PNG)
