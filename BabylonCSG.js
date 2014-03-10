@@ -6,6 +6,9 @@ var BABYLON = BABYLON || {};
 // Based on https://github.com/evanw/csg.js/
 (function() {
 
+    // Unique ID when we import meshes from Babylon to CSG
+    var _currentCSGMeshId = 0;
+
     BABYLON.CSG = function() {
         this.polygons = [];
     };
@@ -32,25 +35,30 @@ var BABYLON = BABYLON || {};
             normals = mesh.getVerticesData(BABYLON.VertexBuffer.NormalKind),
             uvs = mesh.getVerticesData(BABYLON.VertexBuffer.UVKind);
 
-        for ( var i = 0, il = indices.length; i < il; i += 3 ) {
-            vertices = [];
-            for (var j = 0; j < 3; j++) {
-                normal = new BABYLON.Vector3(normals[indices[i + j] * 3], normals[indices[i + j] * 3 + 1], normals[indices[i + j] * 3 + 2]);
-                uv = new BABYLON.Vector2(uvs[indices[i + j] * 2], uvs[indices[i + j] * 2 + 1]);
-                position = new BABYLON.Vector3( positions[indices[i + j] * 3], positions[indices[i + j] * 3 + 1], positions[indices[i + j] * 3 + 2]);
-                position = BABYLON.Vector3.TransformCoordinates(position, this.matrix);
-                normal = BABYLON.Vector3.TransformNormal(normal, this.matrix);
+        var subMeshes = mesh.subMeshes;
 
-                vertex = new BABYLON.CSG.Vertex( position, normal, uv );
-                vertices.push( vertex );
+        for ( var sm = 0, sml = subMeshes.length; sm < sml; sm++ ) {
+            for ( var i = subMeshes[sm].indexStart, il = subMeshes[sm].indexCount + subMeshes[sm].indexStart; i < il; i += 3 ) {
+                vertices = [];
+                for (var j = 0; j < 3; j++) {
+                    normal = new BABYLON.Vector3(normals[indices[i + j] * 3], normals[indices[i + j] * 3 + 1], normals[indices[i + j] * 3 + 2]);
+                    uv = new BABYLON.Vector2(uvs[indices[i + j] * 2], uvs[indices[i + j] * 2 + 1]);
+                    position = new BABYLON.Vector3( positions[indices[i + j] * 3], positions[indices[i + j] * 3 + 1], positions[indices[i + j] * 3 + 2]);
+                    position = BABYLON.Vector3.TransformCoordinates(position, this.matrix);
+                    normal = BABYLON.Vector3.TransformNormal(normal, this.matrix);
+
+                    vertex = new BABYLON.CSG.Vertex( position, normal, uv );
+                    vertices.push( vertex );
+                }
+
+                polygon = new BABYLON.CSG.Polygon(vertices, { subMeshId : sm, meshId : _currentCSGMeshId, materialIndex : subMeshes[sm].materialIndex });
+                polygons.push( polygon );
             }
-
-            polygon = new BABYLON.CSG.Polygon(vertices);
-            polygons.push( polygon );
-        };
+        }
 
         var csg = BABYLON.CSG.fromPolygons( polygons );
         csg.copyTransformAttributes(this);
+        _currentCSGMeshId++
 
         return csg;
     };
@@ -137,7 +145,7 @@ var BABYLON = BABYLON || {};
 
     // Build Raw mesh from CSG
     // Coordinates here are in world space
-    BABYLON.CSG.prototype.buildMeshGeometry = function(name, scene) {
+    BABYLON.CSG.prototype.buildMeshGeometry = function(name, scene, keepSubMeshes) {
         var matrix = this.matrix.clone();
         matrix.invert();
 
@@ -146,15 +154,41 @@ var BABYLON = BABYLON || {};
             indices = [], 
             normals = [],
             uvs = [],
-            vertex, normal, uv,
+            vertex, normal, uv, 
             polygons = this.polygons,
             polygonIndices = [0, 0, 0],
             polygon,
             vertice_dict = {},
-            vertex_idx;
+            vertex_idx,
+            currentIndex = 0,
+            subMesh_dict = {},
+            subMesh_obj;
+
+        if (keepSubMeshes) {
+            // Sort Polygons, since subMeshes are indices range
+            polygons.sort(function (a,b) { 
+                if (a.shared.meshId === b.shared.meshId)
+                    return a.shared.subMeshId - b.shared.subMeshId; 
+                else 
+                    return a.shared.meshId - b.shared.meshId;
+            });            
+        }
 
         for ( var i = 0, il = polygons.length; i < il; i++ ) {
             polygon = polygons[i];
+
+            // Building SubMeshes
+            if (!subMesh_dict[polygon.shared.meshId]) {
+                subMesh_dict[polygon.shared.meshId] = {};
+            }
+            if (!subMesh_dict[polygon.shared.meshId][polygon.shared.subMeshId]) {
+                subMesh_dict[polygon.shared.meshId][polygon.shared.subMeshId] = { indexStart : +Infinity, 
+                                                                                  indexEnd : -Infinity, 
+                                                                                  materialIndex : polygon.shared.materialIndex
+                                                                                };
+            }
+            subMesh_obj = subMesh_dict[polygon.shared.meshId][polygon.shared.subMeshId];
+
             
             for ( var j = 2, jl = polygon.vertices.length; j < jl; j++ ) {
                 
@@ -188,6 +222,10 @@ var BABYLON = BABYLON || {};
                     }
 
                     indices.push(vertex_idx);
+
+                    subMesh_obj.indexStart = Math.min(currentIndex, subMesh_obj.indexStart);
+                    subMesh_obj.indexEnd = Math.max(currentIndex, subMesh_obj.indexEnd);
+                    currentIndex++
                 }
 
             }
@@ -199,12 +237,30 @@ var BABYLON = BABYLON || {};
         mesh.setVerticesData(uvs, BABYLON.VertexBuffer.UVKind);
         mesh.setIndices(indices);
 
+        if (keepSubMeshes) {
+            // We offset the materialIndex by the previous number of materials in the CSG mixed meshes
+            var materialIndexOffset = 0,
+                materialMaxIndex;
+
+            mesh.subMeshes.length = 0;
+
+            for (var m in subMesh_dict) {
+                materialMaxIndex = -1;
+                for (var sm in subMesh_dict[m]) {
+                    subMesh_obj = subMesh_dict[m][sm];
+                    BABYLON.SubMesh.CreateFromIndices(subMesh_obj.materialIndex + materialIndexOffset, subMesh_obj.indexStart, subMesh_obj.indexEnd - subMesh_obj.indexStart + 1, mesh);
+                    materialMaxIndex = Math.max(subMesh_obj.materialIndex, materialMaxIndex);
+                }
+                materialIndexOffset += ++materialMaxIndex;
+            }
+        }
+
         return mesh;
     };
 
     // Build Mesh from CSG taking material and transforms into account
-    BABYLON.CSG.prototype.toMesh = function( name, material, scene ) {
-        var mesh = this.buildMeshGeometry(name, scene);
+    BABYLON.CSG.prototype.toMesh = function( name, material, scene, keepSubMeshes ) {
+        var mesh = this.buildMeshGeometry(name, scene, keepSubMeshes);
         
         mesh.material = material;
 
