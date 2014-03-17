@@ -52,7 +52,11 @@ var BABYLON = BABYLON || {};
                 }
 
                 polygon = new BABYLON.CSG.Polygon(vertices, { subMeshId : sm, meshId : _currentCSGMeshId, materialIndex : subMeshes[sm].materialIndex });
-                polygons.push( polygon );
+
+                // To handle the case of degenerated triangle
+                // polygon.plane == null <=> the polygon does not represent 1 single plane <=> the triangle is degenerated
+                if (polygon.plane)
+                    polygons.push( polygon );
             }
         }
 
@@ -335,6 +339,10 @@ var BABYLON = BABYLON || {};
             return Math.sqrt(this.dot(this));
         },
 
+        lengthSq: function() {
+            return this.dot(this);
+        },
+
         unit: function() {
             return this.dividedBy(this.length());
         },
@@ -402,6 +410,13 @@ var BABYLON = BABYLON || {};
     BABYLON.CSG.Plane.EPSILON = 1e-5;
 
     BABYLON.CSG.Plane.fromPoints = function(a, b, c) {
+        var v0 = c.minus(a);
+        var v1 = b.minus(a);
+
+        if (v0.lengthSq() === 0 || v1.lengthSq() === 0) {
+            return null
+        }
+
         var n = c.minus(a).cross(b.minus(a)).unit();
         return new BABYLON.CSG.Plane(n, n.dot(a));
     };
@@ -486,6 +501,7 @@ var BABYLON = BABYLON || {};
         this.vertices = vertices;
         this.shared = shared;
         this.plane = BABYLON.CSG.Plane.fromPoints(vertices[0].pos, vertices[1].pos, vertices[2].pos);
+
     };
 
     BABYLON.CSG.Polygon.prototype = {
